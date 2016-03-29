@@ -68,6 +68,15 @@ public:
   VarDouble* ty;
   VarDouble* tz;
 
+  VarDouble* q0P;
+  VarDouble* q1P;
+  VarDouble* q2P;
+  VarDouble* q3P;
+
+  VarDouble* txP;
+  VarDouble* tyP;
+  VarDouble* tzP;
+  
   std::vector<CalibrationData> calibrationSegments;
 
   Eigen::VectorXd p_alpha;
