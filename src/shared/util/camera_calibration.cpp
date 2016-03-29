@@ -29,6 +29,18 @@ CameraParameters::CameraParameters(int camera_index_) :
   //do not overwrite min/max ranges with values from config file
   tz->addFlags(VARTYPE_FLAG_NOLOAD_ATTRIBUTES);
 
+  q0P = new VarDouble("q0", 0.7);
+  q1P = new VarDouble("q1", -0.7);
+  q2P = new VarDouble("q2", .0);
+  q3P = new VarDouble("q3", .0);
+
+  txP = new VarDouble("tx", 0);
+  tyP = new VarDouble("ty", 1250);
+
+  tzP = new VarDouble("tz", 3500, 0, 5000);
+  //do not overwrite min/max ranges with values from config file
+  tzP->addFlags(VARTYPE_FLAG_NOLOAD_ATTRIBUTES);
+  
   additional_calibration_information =
       new AdditionalCalibrationInformation(camera_index);
 
