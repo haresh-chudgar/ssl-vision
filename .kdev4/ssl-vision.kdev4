@@ -1,0 +1,36 @@
+[CMake]
+Build Directory Count=1
+Current Build Directory Index=0
+ProjectRootRelative=./
+
+[CMake][CMake Build Directory 0]
+Build Directory Path=file:///home/haresh/Documents/projects/mygithub/ssl-vision/build
+Build Type=Debug
+CMake Binary=file:///usr/bin/cmake
+Environment Profile=
+Extra Arguments=
+Install Directory=
+
+[Launch]
+Launch Configurations=Launch Configuration 0
+
+[Launch][Launch Configuration 0]
+Configured Launch Modes=execute
+Configured Launchers=nativeAppLauncher
+Name=vision
+Type=Native Application
+
+[Launch][Launch Configuration 0][Data]
+Arguments=
+Dependencies=@Variant(\x00\x00\x00\t\x00\x00\x00\x00\x00)
+Dependency Action=Nothing
+EnvironmentGroup=default
+Executable=file:///home/haresh/Documents/projects/mygithub/ssl-vision/bin/vision
+External Terminal=konsole --noclose --workdir %workdir -e %exe
+Project Target=ssl-vision,vision
+Use External Terminal=false
+Working Directory=
+isExecutable=true
+
+[Project]
+VersionControlSupport=kdevgit

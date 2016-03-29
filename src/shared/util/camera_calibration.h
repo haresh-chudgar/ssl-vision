@@ -43,6 +43,10 @@
 **/
 class CameraParameters
 {
+private:
+  void f2iToi2f();
+  void i2fTof2i();
+  
 public:
 
   class AdditionalCalibrationInformation;
@@ -90,6 +94,10 @@ public:
   GVector::vector3d<double> getWorldLocation();
   void field2image(const GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i) const;
   void image2field(GVector::vector3d< double >& p_f, const GVector::vector2d< double >& p_i, double z) const;
+  
+  void initialCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
+  void fullCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
+  
   void calibrate(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
 
   double radialDistortion(double ru) const;  //apply radial distortion to (undistorted) radius ru and return distorted radius
@@ -100,8 +108,10 @@ public:
   void radialDistortion(const GVector::vector2d<double> pu, GVector::vector2d<double> &pd, double dist) const;
 
   double calc_chisqr(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p, int);
+  double calc_chisqr_temp(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p, int);
   void field2image(GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i, Eigen::VectorXd &p);
-
+  void field2image_i2f(GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i, Eigen::VectorXd &p);
+  
   void toProtoBuffer(SSL_GeometryCameraCalibration & buffer, int camera_id) const;
   void fromProtoBuffer(const SSL_GeometryCameraCalibration & buffer);
 

@@ -135,7 +135,7 @@ set (CMAKE_CXX_FLAGS_DEBUG "-g -Wl,--no-as-needed")
 #flags to set in release mode
 set (CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG -O3 -march=native -Wl,--no-as-needed")
 
-message( STATUS "CC Flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+message( STATUS "CC Flags: ${CMAKE_CXX_FLAGS_DEBUG}")
 message (STATUS "Custom CC Flags: ${cc_flags}")
 
 add_definitions(${cc_flags})
