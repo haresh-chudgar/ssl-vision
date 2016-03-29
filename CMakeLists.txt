@@ -17,6 +17,8 @@ include_directories(${PROJECT_BINARY_DIR})
 find_package( Eigen3 REQUIRED )
 include_directories(${EIGEN3_INCLUDE_DIR})
 
+FIND_PACKAGE(Ceres REQUIRED)
+
 include ( ${QT_USE_FILE} )
 
 include(src/shared/CMakeLists.txt.inc)
@@ -140,7 +142,7 @@ message (STATUS "Custom CC Flags: ${cc_flags}")
 
 add_definitions(${cc_flags})
 
-set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU )
+set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU ceres )
 
 ## build the common code
 add_library(sslvision ${SHARED_MOC_SRCS} ${SHARED_RC_SRCS} ${CC_PROTO} ${SHARED_SRCS})

@@ -95,8 +95,8 @@ public:
   void field2image(const GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i) const;
   void image2field(GVector::vector3d< double >& p_f, const GVector::vector2d< double >& p_i, double z) const;
   
-  void initialCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
-  void fullCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
+  void initialCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i);
+  void fullCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i);
   
   void calibrate(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type);
 
@@ -107,7 +107,7 @@ public:
   double radialDistortion(double ru, double dist) const;
   void radialDistortion(const GVector::vector2d<double> pu, GVector::vector2d<double> &pd, double dist) const;
 
-  double calc_chisqr(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p, int);
+  double calc_chisqr(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p);
   void field2image(GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i, Eigen::VectorXd &p);
   void field2image_i2f(GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i, Eigen::VectorXd &p);
   
