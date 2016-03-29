@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include "quaternion.h"
 #include "field.h"
 #include "field_default_constants.h"
 #include "geomalgo.h"
@@ -188,12 +189,29 @@ void CameraParameters::radialDistortion(
 void CameraParameters::field2image(
     const GVector::vector3d<double> &p_f,
     GVector::vector2d<double> &p_i) const {
+
+  //Add increment to R'
+  Quaternion<double> q_field2cam = Quaternion<double>(
+      q0P->getDouble(),q1P->getDouble(),q2P->getDouble(),q3P->getDouble());
+  q_field2cam.norm();
+  //Convert R' to R
+  q_field2cam.invert();
+  q_field2cam.norm();
+  
+  //Add increment to T'
+  GVector::vector3d<double> translation = GVector::vector3d<double>(
+      txP->getDouble(),tyP->getDouble(),tzP->getDouble());
+  //Convert T' to T
+  translation = q_field2cam.rotateVectorByQuaternion(GVector::vector3d<double>(0,0,0) - translation);
+  
+  /*
   Quaternion<double> q_field2cam = Quaternion<double>(
       q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
   q_field2cam.norm();
   GVector::vector3d<double> translation = GVector::vector3d<double>(
       tx->getDouble(),ty->getDouble(),tz->getDouble());
-
+  */
+  
   // First transform the point from the field into the coordinate system of the
   // camera
   GVector::vector3d<double> p_c =
@@ -223,7 +241,7 @@ void CameraParameters::field2image_i2f(
   GVector::vector3d<double> aa_diff(p[Q_1], p[Q_2], p[Q_3]);
   Quaternion<double> q_diff;
   q_diff.setAxis(aa_diff.norm(), aa_diff.length());
-  q_field2cam = q_field2cam * q_diff;
+  q_field2cam = q_diff * q_field2cam;
 
   //Convert R' to R
   q_field2cam.invert();
@@ -455,77 +473,6 @@ double CameraParameters::calc_chisqr(
   return chisqr;
 }
 
-double CameraParameters::calc_chisqr_temp(
-    std::vector<GVector::vector3d<double> > &p_f,
-    std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p,
-    int cal_type) {
-  assert(p_f.size() == p_i.size());
-
-  double cov_cx_inv =
-      1.0 / additional_calibration_information->cov_corner_x->getDouble();
-  double cov_cy_inv =
-      1.0 / additional_calibration_information->cov_corner_y->getDouble();
-
-  double cov_lsx_inv =
-      1.0 / additional_calibration_information->cov_ls_x->getDouble();
-  double cov_lsy_inv =
-      1.0 / additional_calibration_information->cov_ls_y->getDouble();
-
-  double chisqr(0);
-
-  // Iterate over manual points
-  std::vector<GVector::vector3d<double> >::iterator it_p_f  = p_f.begin();
-  std::vector<GVector::vector2d<double> >::iterator it_p_i  = p_i.begin();
-
-  for (; it_p_f != p_f.end(); it_p_f++, it_p_i++)
-  {
-    GVector::vector2d<double> proj_p;
-    field2image(*it_p_f, proj_p, p);
-    chisqr += (proj_p.x - it_p_i->x) * (proj_p.x - it_p_i->x) * cov_cx_inv +
-        (proj_p.y - it_p_i->y) * (proj_p.y - it_p_i->y) * cov_cy_inv;
-  }
-
-  // Iterate of line edge points, but only when performing a full estimation
-  if (cal_type & FULL_ESTIMATION)
-  {
-    std::vector<CalibrationData>::iterator ls_it = calibrationSegments.begin();
-
-    int i = 0;
-    for (; ls_it != calibrationSegments.end(); ls_it++) {
-      std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
-          imgPts_it = (*ls_it).imgPts.begin();
-      for (; imgPts_it != (*ls_it).imgPts.end(); imgPts_it++) {
-        // Integrate only if a valid point on line
-        if (imgPts_it->second) {
-          GVector::vector2d<double> proj_p;
-          double alpha = p_alpha(i) + p(STATE_SPACE_DIMENSION + i);
-
-          // Calculate point on segment
-          GVector::vector3d<double> alpha_point;
-          if (ls_it->straightLine) {
-            alpha_point = alpha * (*ls_it).p1 + (1.0 - alpha) * (*ls_it).p2;
-          } else {
-            double theta = alpha * (*ls_it).theta1 + (1.0 - alpha) * (*ls_it).theta2;
-            alpha_point = ls_it->center +
-                ls_it->radius*GVector::vector3d<double>(
-                    cos(theta),sin(theta),0.0);
-          }
-
-          // Project into image plane
-          field2image(alpha_point, proj_p, p);
-
-          chisqr += (proj_p.x-imgPts_it->first.x) *
-              (proj_p.x-imgPts_it->first.x) * cov_lsx_inv +
-              (proj_p.y - imgPts_it->first.y) *
-              (proj_p.y - imgPts_it->first.y) * cov_lsy_inv;
-          i++;
-        }
-      }
-    }
-  }
-  return chisqr;
-}
-
 void CameraParameters::do_calibration(int cal_type) {
   std::vector<GVector::vector3d<double> > p_f;
   std::vector<GVector::vector2d<double> > p_i;
@@ -562,6 +509,8 @@ void CameraParameters::reset() {
   q1->resetToDefault();
   q2->resetToDefault();
   q3->resetToDefault();
+  
+  f2iToi2f();
 }
 
 void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i, int cal_type) {
@@ -583,13 +532,6 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
 
   // Calculate first chisqr for all points using the start parameters
   double old_chisqr = calc_chisqr(p_f, p_i, p, cal_type);
-
-#ifndef NDEBUG
-  std::cerr << "Chi-square: "<< old_chisqr << std::endl;
-#endif
-
-  // Calculate first chisqr for all points using the start parameters
-  old_chisqr = calc_chisqr_temp(p_f, p_i, p, cal_type);
 
 #ifndef NDEBUG
   std::cerr << "Chi-square: "<< old_chisqr << std::endl;
