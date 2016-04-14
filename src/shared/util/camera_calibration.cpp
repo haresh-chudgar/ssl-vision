@@ -218,10 +218,14 @@ void CameraParameters::field2image(
       q_field2cam.rotateVectorByQuaternion(p_f) + translation;
   GVector::vector2d<double> p_un =
       GVector::vector2d<double>(p_c.x/p_c.z, p_c.y/p_c.z);
-
   // Apply distortion
   GVector::vector2d<double> p_d;
   radialDistortion(p_un,p_d);
+
+  if(p_c.z < 0) {
+    p_d.x = -p_d.x;
+    p_d.y = -p_d.y;
+  }
 
   // Then project from the camera coordinate system onto the image plane using
   // the instrinsic parameters
