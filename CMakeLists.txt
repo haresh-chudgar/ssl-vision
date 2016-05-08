@@ -21,6 +21,9 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(/home/haresh/aravis/src)
 include_directories(/usr/include/glib-2.0)
 include_directories(/usr/lib/x86_64-linux-gnu/glib-2.0/include)
+
+FIND_PACKAGE(Ceres REQUIRED)
+
 include ( ${QT_USE_FILE} )
 
 include(src/shared/CMakeLists.txt.inc)
@@ -139,12 +142,12 @@ set (CMAKE_CXX_FLAGS_DEBUG "-g -Wl,--no-as-needed")
 #flags to set in release mode
 set (CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG -O3 -march=native -Wl,--no-as-needed")
 
-message( STATUS "CC Flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+message( STATUS "CC Flags: ${CMAKE_CXX_FLAGS_DEBUG}")
 message (STATUS "Custom CC Flags: ${cc_flags}")
 
 add_definitions(${cc_flags})
 
-set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU gobject-2.0 glib-2.0 aravis-0.4)
+set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU gobject-2.0 glib-2.0 aravis-0.4 ceres)
 
 ## build the common code
 add_library(sslvision ${SHARED_MOC_SRCS} ${SHARED_RC_SRCS} ${CC_PROTO} ${SHARED_SRCS})

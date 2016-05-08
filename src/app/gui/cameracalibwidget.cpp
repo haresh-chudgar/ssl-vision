@@ -57,11 +57,11 @@ CameraCalibrationWidget::CameraCalibrationWidget(CameraParameters &_cp) : camera
   // The slider for height control:
   QLabel* heightLabel = new QLabel("Camera Height (in mm) ");
   cameraHeightSlider = new QSlider(Qt::Horizontal);
-  cameraHeightSlider->setMinimum((int)camera_parameters.tz->getMin());
-  cameraHeightSlider->setMaximum((int)camera_parameters.tz->getMax());
-  cameraHeightSlider->setValue((int)camera_parameters.tz->getDouble());
+  cameraHeightSlider->setMinimum((int)camera_parameters.tzP->getMin());
+  cameraHeightSlider->setMaximum((int)camera_parameters.tzP->getMax());
+  cameraHeightSlider->setValue((int)camera_parameters.tzP->getDouble());
   cameraHeightLabelRight = new QLabel();
-  cameraHeightLabelRight->setNum((int)camera_parameters.tz->getDouble());
+  cameraHeightLabelRight->setNum((int)camera_parameters.tzP->getDouble());
   connect(cameraHeightSlider, SIGNAL(valueChanged(int)), this, SLOT(cameraheight_slider_changed(int)));
   // Distortion slider
   QLabel* distortionLabel = new QLabel("Distortion ");
@@ -141,7 +141,7 @@ void CameraCalibrationWidget::edges_is_clicked()
 
 void CameraCalibrationWidget::set_slider_from_vars()
 {
-  cameraHeightSlider->setValue((int)camera_parameters.tz->getDouble());
+  cameraHeightSlider->setValue((int)camera_parameters.tzP->getDouble());
   distortionSlider->setValue((int)(camera_parameters.distortion->getDouble()*100));
   lineSearchCorridorWidthSlider->setValue((int)(camera_parameters.additional_calibration_information->line_search_corridor_width->getDouble()));
 }
@@ -149,7 +149,7 @@ void CameraCalibrationWidget::set_slider_from_vars()
 void CameraCalibrationWidget::cameraheight_slider_changed(int val)
 {
   cameraHeightLabelRight->setNum(val);
-  camera_parameters.tz->setDouble(val);
+  camera_parameters.tzP->setDouble(val);
 }
 
 void CameraCalibrationWidget::distortion_slider_changed(int val)

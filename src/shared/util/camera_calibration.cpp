@@ -4,9 +4,18 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
+#include "quaternion.h"
 #include "field.h"
 #include "field_default_constants.h"
 #include "geomalgo.h"
+
+using ceres::AutoDiffCostFunction;
+using ceres::CostFunction;
+using ceres::Problem;
+using ceres::Solver;
+using ceres::Solve;
 
 CameraParameters::CameraParameters(int camera_index_) :
     camera_index(camera_index_), p_alpha(Eigen::VectorXd(1)) {
@@ -29,6 +38,20 @@ CameraParameters::CameraParameters(int camera_index_) :
   //do not overwrite min/max ranges with values from config file
   tz->addFlags(VARTYPE_FLAG_NOLOAD_ATTRIBUTES);
 
+  q0P = new VarDouble("q0P", 0.7);
+  q1P = new VarDouble("q1P", -0.7);
+  q2P = new VarDouble("q2P", .0);
+  q3P = new VarDouble("q3P", .0);
+
+  txP = new VarDouble("txP", 0);
+  tyP = new VarDouble("tyP", 1250);
+
+  tzP = new VarDouble("tzP", 3500, 0, 5000);
+  //do not overwrite min/max ranges with values from config file
+  tzP->addFlags(VARTYPE_FLAG_NOLOAD_ATTRIBUTES);
+  
+  f2iToi2f();
+  
   additional_calibration_information =
       new AdditionalCalibrationInformation(camera_index);
 
@@ -47,6 +70,13 @@ CameraParameters::~CameraParameters() {
   delete tx;
   delete ty;
   delete tz;
+  delete q0P;
+  delete q1P;
+  delete q2P;
+  delete q3P;
+  delete txP;
+  delete tyP;
+  delete tzP;
   delete additional_calibration_information;
 }
 
@@ -82,13 +112,7 @@ void CameraParameters::toProtoBuffer(
 }
 
 GVector::vector3d< double > CameraParameters::getWorldLocation() {
-  Quaternion<double> q;
-  q.set(q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
-  q.invert();
-  GVector::vector3d<double> v_in(tx->getDouble(),ty->getDouble(),tz->getDouble());
-  v_in = (-(v_in));
-  GVector::vector3d<double> v_out = q.rotateVectorByQuaternion(v_in);
-  return v_out;
+  return GVector::vector3d<double>(txP->getDouble(),tyP->getDouble(),tzP->getDouble());
 }
 
 void CameraParameters::fromProtoBuffer(
@@ -104,6 +128,8 @@ void CameraParameters::fromProtoBuffer(
   tx->setDouble(buffer.tx());
   ty->setDouble(buffer.ty());
   tz->setDouble(buffer.tz());
+  
+  f2iToi2f();
 }
 
 void CameraParameters::addSettingsToList(VarList& list) {
@@ -174,22 +200,32 @@ void CameraParameters::radialDistortion(
 void CameraParameters::field2image(
     const GVector::vector3d<double> &p_f,
     GVector::vector2d<double> &p_i) const {
-  Quaternion<double> q_field2cam = Quaternion<double>(
-      q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
-  q_field2cam.norm();
-  GVector::vector3d<double> translation = GVector::vector3d<double>(
-      tx->getDouble(),ty->getDouble(),tz->getDouble());
 
+  //Convert R' to R
+  Quaternion<double> q_field2cam = Quaternion<double>(
+      q0P->getDouble(),q1P->getDouble(),q2P->getDouble(),q3P->getDouble());
+  q_field2cam.invert();
+  q_field2cam.norm();
+  
+  //Convert T' to T
+  GVector::vector3d<double> translation = GVector::vector3d<double>(
+      txP->getDouble(),tyP->getDouble(),tzP->getDouble());
+  translation = q_field2cam.rotateVectorByQuaternion(GVector::vector3d<double>(0,0,0) - translation);
+  
   // First transform the point from the field into the coordinate system of the
   // camera
   GVector::vector3d<double> p_c =
       q_field2cam.rotateVectorByQuaternion(p_f) + translation;
   GVector::vector2d<double> p_un =
       GVector::vector2d<double>(p_c.x/p_c.z, p_c.y/p_c.z);
-
   // Apply distortion
   GVector::vector2d<double> p_d;
   radialDistortion(p_un,p_d);
+
+  if(p_c.z < 0) {
+    p_d.x = -p_d.x;
+    p_d.y = -p_d.y;
+  }
 
   // Then project from the camera coordinate system onto the image plane using
   // the instrinsic parameters
@@ -201,24 +237,33 @@ void CameraParameters::field2image(
 void CameraParameters::field2image(
     GVector::vector3d<double> &p_f, GVector::vector2d<double> &p_i,
     Eigen::VectorXd &p) {
+  
+  //Add increment to R'
   Quaternion<double> q_field2cam = Quaternion<double>(
-      q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
+      q0P->getDouble(),q1P->getDouble(),q2P->getDouble(),q3P->getDouble());
   q_field2cam.norm();
-  GVector::vector3d<double> translation = GVector::vector3d<double>(
-      tx->getDouble(),ty->getDouble(),tz->getDouble());
-
   GVector::vector3d<double> aa_diff(p[Q_1], p[Q_2], p[Q_3]);
-  GVector::vector3d<double> t_diff(p[T_1], p[T_2], p[T_3]);
-
-  // Create a quaternion out of the 3D rotational representation
   Quaternion<double> q_diff;
   q_diff.setAxis(aa_diff.norm(), aa_diff.length());
+  q_field2cam = q_diff * q_field2cam;
 
+  //Convert R' to R
+  q_field2cam.invert();
+  q_field2cam.norm();
+  
+  //Add increment to T'
+  GVector::vector3d<double> translation = GVector::vector3d<double>(
+      txP->getDouble(),tyP->getDouble(),tzP->getDouble());
+  GVector::vector3d<double> t_diff(p[T_1], p[T_2], p[T_3]);
+  translation = translation + t_diff;
+  
+  //Convert T' to T
+  translation = q_field2cam.rotateVectorByQuaternion(GVector::vector3d<double>(0,0,0) - translation);
+  
   // First transform the point from the field into the coordinate system of the
   // camera
   GVector::vector3d<double> p_c =
-      (q_diff * q_field2cam ).rotateVectorByQuaternion(p_f) + translation +
-      t_diff;
+      q_field2cam.rotateVectorByQuaternion(p_f) + translation;
   GVector::vector2d<double> p_un =
       GVector::vector2d<double>(p_c.x/p_c.z, p_c.y/p_c.z);
 
@@ -272,11 +317,63 @@ void CameraParameters::image2field(
   p_f = zero_in_w + v_in_w.norm() * t;
 }
 
+void CameraParameters::i2fTof2i() {
+  
+  cout << "T': " << txP->getDouble() << " " << tyP->getDouble() << " " << tzP->getDouble() << endl;
+  cout << "R': " << q0P->getDouble() << " " << q1P->getDouble() << " " << q2P->getDouble() << " " << q3P->getDouble() << endl;
+  
+  cout << "T: " << tx->getDouble() << " " << ty->getDouble() << " " << tz->getDouble() << endl;
+  cout << "R: " << q0->getDouble() << " " << q1->getDouble() << " " << q2->getDouble() << " " << q3->getDouble() << endl;
+  
+  //Convert R^prime to R and T^prime to T
+  Quaternion<double> q_f2i = Quaternion<double>(
+	q0P->getDouble(),q1P->getDouble(),q2P->getDouble(),q3P->getDouble());
+  q_f2i.invert();
+  q_f2i.norm();
+  GVector::vector3d<double> translation = GVector::vector3d<double>(txP->getDouble(), tyP->getDouble(), tzP->getDouble());
+  translation = q_f2i.rotateVectorByQuaternion(GVector::vector3d<double>(0,0,0) - translation);
+  q0->setDouble(q_f2i.x);
+  q1->setDouble(q_f2i.y);
+  q2->setDouble(q_f2i.z);
+  q3->setDouble(q_f2i.w);
+  tx->setDouble(translation.x);
+  ty->setDouble(translation.y);
+  tz->setDouble(translation.z);
+  
+  cout << "T: " << tx->getDouble() << " " << ty->getDouble() << " " << tz->getDouble() << endl;
+  cout << "R: " << q0->getDouble() << " " << q1->getDouble() << " " << q2->getDouble() << " " << q3->getDouble() << endl;
+}
+
+void CameraParameters::f2iToi2f() {
+
+  cout << "T: " << tx->getDouble() << " " << ty->getDouble() << " " << tz->getDouble() << endl;
+  cout << "R: " << q0->getDouble() << " " << q1->getDouble() << " " << q2->getDouble() << " " << q3->getDouble() << endl;
+  
+  cout << "T': " << txP->getDouble() << " " << tyP->getDouble() << " " << tzP->getDouble() << endl;
+  cout << "R': " << q0P->getDouble() << " " << q1P->getDouble() << " " << q2P->getDouble() << " " << q3P->getDouble() << endl;
+
+  //Convert R to R^prime and T to T^prime
+  Quaternion<double> q_c2f = Quaternion<double>(
+	q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
+  q_c2f.invert();
+  q_c2f.norm();
+  GVector::vector3d<double> translation = GVector::vector3d<double>(tx->getDouble(), ty->getDouble(), tz->getDouble());
+  translation = q_c2f.rotateVectorByQuaternion(GVector::vector3d<double>(0,0,0) - translation);
+  q0P->setDouble(q_c2f.x);
+  q1P->setDouble(q_c2f.y);
+  q2P->setDouble(q_c2f.z);
+  q3P->setDouble(q_c2f.w);
+  txP->setDouble(translation.x);
+  tyP->setDouble(translation.y);
+  tzP->setDouble(translation.z);
+
+  cout << "T': " << txP->getDouble() << " " << tyP->getDouble() << " " << tzP->getDouble() << endl;
+  cout << "R': " << q0P->getDouble() << " " << q1P->getDouble() << " " << q2P->getDouble() << " " << q3P->getDouble() << endl;
+}
 
 double CameraParameters::calc_chisqr(
     std::vector<GVector::vector3d<double> > &p_f,
-    std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p,
-    int cal_type) {
+    std::vector<GVector::vector2d<double> > &p_i, Eigen::VectorXd &p) {
   assert(p_f.size() == p_i.size());
 
   double cov_cx_inv =
@@ -303,44 +400,6 @@ double CameraParameters::calc_chisqr(
         (proj_p.y - it_p_i->y) * (proj_p.y - it_p_i->y) * cov_cy_inv;
   }
 
-  // Iterate of line edge points, but only when performing a full estimation
-  if (cal_type & FULL_ESTIMATION)
-  {
-    std::vector<CalibrationData>::iterator ls_it = calibrationSegments.begin();
-
-    int i = 0;
-    for (; ls_it != calibrationSegments.end(); ls_it++) {
-      std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
-          imgPts_it = (*ls_it).imgPts.begin();
-      for (; imgPts_it != (*ls_it).imgPts.end(); imgPts_it++) {
-        // Integrate only if a valid point on line
-        if (imgPts_it->second) {
-          GVector::vector2d<double> proj_p;
-          double alpha = p_alpha(i) + p(STATE_SPACE_DIMENSION + i);
-
-          // Calculate point on segment
-          GVector::vector3d<double> alpha_point;
-          if (ls_it->straightLine) {
-            alpha_point = alpha * (*ls_it).p1 + (1.0 - alpha) * (*ls_it).p2;
-          } else {
-            double theta = alpha * (*ls_it).theta1 + (1.0 - alpha) * (*ls_it).theta2;
-            alpha_point = ls_it->center +
-                ls_it->radius*GVector::vector3d<double>(
-                    cos(theta),sin(theta),0.0);
-          }
-
-          // Project into image plane
-          field2image(alpha_point, proj_p, p);
-
-          chisqr += (proj_p.x-imgPts_it->first.x) *
-              (proj_p.x-imgPts_it->first.x) * cov_lsx_inv +
-              (proj_p.y - imgPts_it->first.y) *
-              (proj_p.y - imgPts_it->first.y) * cov_lsy_inv;
-          i++;
-        }
-      }
-    }
-  }
   return chisqr;
 }
 
@@ -360,7 +419,11 @@ void CameraParameters::do_calibration(int cal_type) {
       aci->control_point_field_ys[i]->getDouble(), 0.0));
   }
 
-  calibrate(p_f, p_i, cal_type);
+  if(cal_type == FOUR_POINT_INITIAL) {
+    initialCalibration(p_f, p_i);
+  } else {
+    fullCalibration(p_f, p_i);
+  }
 }
 
 void CameraParameters::reset() {
@@ -375,13 +438,12 @@ void CameraParameters::reset() {
   q1->resetToDefault();
   q2->resetToDefault();
   q3->resetToDefault();
+  
+  f2iToi2f();
 }
 
-void CameraParameters::calibrate(
-    std::vector<GVector::vector3d<double> > &p_f,
-    std::vector<GVector::vector2d<double> > &p_i, int cal_type) {
+void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i) {
   assert(p_f.size() == p_i.size());
-  assert(cal_type != 0);
 
   p_to_est.clear();
   p_to_est.push_back(FOCAL_LENGTH);
@@ -391,57 +453,18 @@ void CameraParameters::calibrate(
   p_to_est.push_back(T_1);
   p_to_est.push_back(T_2);
 
-  int num_alpha(0);
-
-  if (cal_type & FULL_ESTIMATION) {
-    int count_alpha(0); //The number of well detected line segment points
-    std::vector<CalibrationData>::iterator ls_it = calibrationSegments.begin();
-    for (; ls_it != calibrationSegments.end(); ls_it++) {
-      std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
-          pts_it = (*ls_it).imgPts.begin();
-      for (; pts_it != (*ls_it).imgPts.end(); pts_it++) {
-        if (pts_it->second) count_alpha ++;
-      }
-    }
-
-
-    if (count_alpha > 0) {
-      p_alpha = Eigen::VectorXd(count_alpha);
-
-      count_alpha = 0;
-      ls_it = calibrationSegments.begin();
-      for (; ls_it != calibrationSegments.end(); ls_it++) {
-        std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
-            pts_it = (*ls_it).imgPts.begin();
-        std::vector< double >::iterator alphas_it = (*ls_it).alphas.begin();
-        for (; pts_it != (*ls_it).imgPts.end() &&
-            alphas_it != (*ls_it).alphas.end(); pts_it++, alphas_it++) {
-          if (pts_it->second) {
-            p_alpha(count_alpha++) = (*alphas_it);
-          }
-        }
-      }
-    }
-
-    p_to_est.push_back(PP_X);
-    p_to_est.push_back(PP_Y);
-    p_to_est.push_back(DIST);
-
-    num_alpha = count_alpha;
-  }
-
   double lambda(0.01);
 
-  Eigen::VectorXd p(STATE_SPACE_DIMENSION + num_alpha);
+  Eigen::VectorXd p(STATE_SPACE_DIMENSION);
   p.setZero();
 
   // Calculate first chisqr for all points using the start parameters
-  double old_chisqr = calc_chisqr(p_f, p_i, p, cal_type);
+  double old_chisqr = calc_chisqr(p_f, p_i, p);
 
 #ifndef NDEBUG
   std::cerr << "Chi-square: "<< old_chisqr << std::endl;
 #endif
-
+  
   // Create and fill corner measurement covariance matrix
   Eigen::Matrix2d cov_corner_inv;
   cov_corner_inv <<
@@ -453,11 +476,12 @@ void CameraParameters::calibrate(
   cov_ls_inv << 1 / additional_calibration_information->cov_ls_x->getDouble(),
       0 , 0 , 1 / additional_calibration_information->cov_ls_y->getDouble();
 
+  int stateDimension = STATE_SPACE_DIMENSION;
   // Matrices for A, b and the Jacobian J
-  Eigen::MatrixXd alpha(STATE_SPACE_DIMENSION + num_alpha,
-                        STATE_SPACE_DIMENSION + num_alpha);
-  Eigen::VectorXd beta(STATE_SPACE_DIMENSION + num_alpha, 1);
-  Eigen::MatrixXd J(2, STATE_SPACE_DIMENSION + num_alpha);
+  Eigen::MatrixXd alpha(stateDimension,
+                        stateDimension);
+  Eigen::VectorXd beta(stateDimension, 1);
+  Eigen::MatrixXd J(2, stateDimension);
 
   bool stop_optimization(false);
   int convergence_counter(0);
@@ -467,7 +491,7 @@ void CameraParameters::calibrate(
     // Iterate over alle point pairs
     std::vector<GVector::vector3d<double> >::iterator it_p_f  = p_f.begin();
     std::vector<GVector::vector2d<double> >::iterator it_p_i  = p_i.begin();
-
+  
     double epsilon = sqrt(std::numeric_limits<double>::epsilon());
 
     alpha.setZero();
@@ -497,80 +521,14 @@ void CameraParameters::calibrate(
       beta += J.transpose() * cov_corner_inv *
           Eigen::Vector2d(proj_p.x, proj_p.y);
     }
-
-    if (cal_type & FULL_ESTIMATION) {
-      // First, calculate how many alpha we need to estimate
-      std::vector<CalibrationData>::iterator ls_it =
-          calibrationSegments.begin();
-
-      int i = 0;
-      for (; ls_it != calibrationSegments.end(); ls_it++) {
-        std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
-            pts_it = (*ls_it).imgPts.begin();
-        for (; pts_it != (*ls_it).imgPts.end(); pts_it++) {
-          if (pts_it->second) {
-            GVector::vector2d<double> proj_p;
-            GVector::vector3d<double >alpha_point;
-            if (ls_it->straightLine) {
-              alpha_point = p_alpha(i) * (*ls_it).p1 + (1 - p_alpha(i)) * (*ls_it).p2;
-            } else {
-              double theta = p_alpha(i) * (*ls_it).theta1 + (1.0 - p_alpha(i)) * (*ls_it).theta2;
-              alpha_point = ls_it->center + ls_it->radius*GVector::vector3d<double>(cos(theta),sin(theta),0.0);
-            }
-            field2image(alpha_point, proj_p, p);
-            proj_p = proj_p - (*pts_it).first;
-
-            J.setZero();
-
-            std::vector<int>::iterator it = p_to_est.begin();
-            for (; it != p_to_est.end(); it++) {
-              int j = *it;
-              Eigen::VectorXd p_diff = p;
-              p_diff(j) = p_diff(j) + epsilon;
-              GVector::vector2d<double> proj_p_diff;
-              field2image(alpha_point, proj_p_diff, p_diff);
-              J(0,j) = ((proj_p_diff.x - (*pts_it).first.x) - proj_p.x) /
-                  epsilon;
-              J(1,j) = ((proj_p_diff.y - (*pts_it).first.y) - proj_p.y) /
-                  epsilon;
-            }
-
-            double my_alpha = p_alpha(i) + epsilon;
-            if (ls_it->straightLine) {
-              alpha_point = my_alpha * (*ls_it).p1 + (1 - my_alpha) *
-                  (*ls_it).p2;
-            } else {
-              double theta = my_alpha * (*ls_it).theta1 + (1.0 - my_alpha) *
-                  (*ls_it).theta2;
-              alpha_point = ls_it->center +
-                  ls_it->radius*GVector::vector3d<double>(cos(theta),
-                                                          sin(theta),0.0);
-            }
-
-
-            GVector::vector2d<double> proj_p_diff;
-            field2image(alpha_point, proj_p_diff);
-            J(0,STATE_SPACE_DIMENSION + i) =
-                ((proj_p_diff.x - (*pts_it).first.x) - proj_p.x) / epsilon;
-            J(1,STATE_SPACE_DIMENSION + i) =
-                ((proj_p_diff.y - (*pts_it).first.y) - proj_p.y) / epsilon;
-
-            alpha += J.transpose() * cov_ls_inv * J;
-            beta += J.transpose() * cov_ls_inv *
-                Eigen::Vector2d(proj_p.x, proj_p.y);
-            i++;
-          }
-        }
-      }
-    }
-
+    
     // Augment alpha
     alpha += Eigen::MatrixXd::Identity(
-        STATE_SPACE_DIMENSION + num_alpha, STATE_SPACE_DIMENSION + num_alpha)
+        STATE_SPACE_DIMENSION, STATE_SPACE_DIMENSION)
         * lambda;
 
     // Solve for x
-    Eigen::VectorXd new_p(STATE_SPACE_DIMENSION + num_alpha);
+    Eigen::VectorXd new_p(STATE_SPACE_DIMENSION);
 
     // Due to an API change we need to check for
     // the right call at compile time
@@ -585,7 +543,7 @@ void CameraParameters::calibrate(
 #endif
 
     // Calculate chisqr again
-    double chisqr = calc_chisqr(p_f, p_i, new_p, cal_type);
+    double chisqr = calc_chisqr(p_f, p_i, new_p);
 
     if (chisqr < old_chisqr) {
       focal_length->setDouble(focal_length->getDouble() + new_p[FOCAL_LENGTH]);
@@ -594,34 +552,31 @@ void CameraParameters::calibrate(
       principal_point_y->setDouble(
           principal_point_y->getDouble() + new_p[PP_Y]);
       distortion->setDouble(distortion->getDouble() + new_p[DIST]);
-      tx->setDouble(tx->getDouble() + new_p[T_1]);
-      ty->setDouble(ty->getDouble() + new_p[T_2]);
-      tz->setDouble(tz->getDouble() + new_p[T_3]);
+      txP->setDouble(txP->getDouble() + new_p[T_1]);
+      tyP->setDouble(tyP->getDouble() + new_p[T_2]);
+      tzP->setDouble(tzP->getDouble() + new_p[T_3]);
 
       Quaternion<double> q_diff;
       GVector::vector3d<double> aa_diff(new_p[Q_1], new_p[Q_2], new_p[Q_3]);
       q_diff.setAxis(aa_diff.norm(), aa_diff.length());
-      Quaternion<double> q_field2cam = Quaternion<double>(
-          q0->getDouble(),q1->getDouble(),q2->getDouble(),q3->getDouble());
-      q_field2cam.norm();
-      q_field2cam = q_diff * q_field2cam ;
-      q0->setDouble(q_field2cam.x);
-      q1->setDouble(q_field2cam.y);
-      q2->setDouble(q_field2cam.z);
-      q3->setDouble(q_field2cam.w);
-
-      for (int i=0; i < num_alpha; i++)
-        p_alpha[i] += new_p[STATE_SPACE_DIMENSION + i];
+      Quaternion<double> q_cam2field = Quaternion<double>(
+          q0P->getDouble(),q1P->getDouble(),q2P->getDouble(),q3P->getDouble());
+      q_cam2field = q_diff * q_cam2field;
+      q_cam2field.norm();
+      q0P->setDouble(q_cam2field.x);
+      q1P->setDouble(q_cam2field.y);
+      q2P->setDouble(q_cam2field.z);
+      q3P->setDouble(q_cam2field.w);
 
       // Normalize focal length an orientation when the optimization tends to go into the wrong
       // of both possible projections
       if (focal_length->getDouble() < 0) {
         focal_length->setDouble(-focal_length->getDouble());
-        q_field2cam = q_rotate180 * q_field2cam;
-        q0->setDouble(q_field2cam.x);
-        q1->setDouble(q_field2cam.y);
-        q2->setDouble(q_field2cam.z);
-        q3->setDouble(q_field2cam.w);
+        q_cam2field = q_rotate180 * q_cam2field;
+        q0P->setDouble(q_cam2field.x);
+        q1P->setDouble(q_cam2field.y);
+        q2P->setDouble(q_cam2field.z);
+        q3P->setDouble(q_cam2field.w);
       }
 
       if (old_chisqr - chisqr < 0.001) {
@@ -645,6 +600,8 @@ void CameraParameters::calibrate(
     }
   }
 
+  i2fTof2i();
+  
 // Debug output starts here
 #ifndef NDEBUG
 
@@ -684,53 +641,216 @@ void CameraParameters::calibrate(
 
   std::cerr << "RESIDUAL CORNER POINTS: " << sqrt(corner_x/4) << " "
             << sqrt(corner_y/4) << std::endl;
+	    
+  #endif
 
- if (cal_type & FULL_ESTIMATION) {
-  // Testing calibration by projecting the points on the lines into the image
-  // plane and calculate MSE
-  double line_x(0);
-  double line_y(0);
+}
 
+struct ImageToFieldCostFunctor {
+  ImageToFieldCostFunctor(GVector::vector2d<double> normal, double offset, GVector::vector2d<double> imagePoint, double height)
+      : _imagePoint(imagePoint), _height(height) {
+	_isStraightLine = true;
+	_normal.x = normal.x;
+	_normal.y = normal.y;
+	_offset = offset;
+      }
+
+  ImageToFieldCostFunctor(GVector::vector3d<double> center, double radius, GVector::vector2d<double> imagePoint, double height)
+      : _imagePoint(imagePoint), _height(height) {
+	_isStraightLine = false;
+	_centerOfArc.x = center.x;
+	_centerOfArc.y = center.y;
+	_centerOfArc.z = center.z;
+	_radiusOfArc = radius;
+      }
+      
+  template <typename T>
+  bool operator()(const T* const camera_rotation,
+                  const T* const camera_translation,
+		  const T* const camera_intrinsics,
+                  T* residuals) const {
+  
+    T oX = T(_imagePoint.x);
+    T oY = T(_imagePoint.y);
+    
+    const T& pX = camera_intrinsics[0];
+    const T& pY = camera_intrinsics[1];
+    const T& focal = camera_intrinsics[2];
+    const T& distortion = camera_intrinsics[3];
+
+    if(focal <= T(0)) 
+      return false;
+    if(distortion < T(0)) 
+      return false;
+    if(pX < T(0))
+      return false;
+    if(pY < T(0))
+      return false;
+    
+    T oPointInCamera[3];
+    oPointInCamera[0] = (oX - pX) / focal;
+    oPointInCamera[1] = (oY - pY) / focal;
+    oPointInCamera[2] = T(1);
+    
+    T rd = ceres::sqrt(oPointInCamera[0] * oPointInCamera[0] + oPointInCamera[1] * oPointInCamera[1]);
+    T ru = rd*(1.0+rd*rd*distortion);
+    oPointInCamera[0] = oPointInCamera[0] * ru / rd;
+    oPointInCamera[1] = oPointInCamera[1] * ru / rd;
+    
+    //cout << "oPointInCamera: x " << oPointInCamera[0] << " y " << oPointInCamera[1] << " z " << oPointInCamera[2] << endl;
+    T oPointInWorld[3];
+    ceres::QuaternionRotatePoint(camera_rotation, oPointInCamera, oPointInWorld);
+    //cout << "oPointInWorld: x " << oPointInWorld[0] << " y " << oPointInWorld[1] << " z " << oPointInWorld[2] << endl;
+    
+    T zero_in_world[3] = {camera_translation[0], camera_translation[1], T(_height)};
+    
+    T len = ceres::sqrt(oPointInWorld[0] * oPointInWorld[0] + oPointInWorld[1] * oPointInWorld[1] + oPointInWorld[2] * oPointInWorld[2]);
+    oPointInWorld[0] /= len;
+    oPointInWorld[1] /= len;
+    oPointInWorld[2] /= len;
+    //cout << "oPointInWorld: x " << oPointInWorld[0] << " y " << oPointInWorld[1] << " z " << oPointInWorld[2] << endl;
+    
+    // (0,0,0), (0,0,1).norm(),zero_in_w, v_in_w.norm());
+    // pOrigin, pNormal, rOrigin, rVector
+    //return(dot(-pNormal,(rOrigin - pOrigin)) / (dot(pNormal,rVector)));
+    //return(-zero_in_w[2] / v_in_w_norm[2]);
+    T factor = -zero_in_world[2] / oPointInWorld[2];
+    //cout << "factor: " << factor << endl;
+    
+    oPointInWorld[0] = zero_in_world[0] + oPointInWorld[0] * factor;
+    oPointInWorld[1] = zero_in_world[1] + oPointInWorld[1] * factor;
+    oPointInWorld[2] = zero_in_world[2] + oPointInWorld[2] * factor;
+    //cout << "oPointInWorld:" << oPointInWorld[0] << "," << oPointInWorld[1] << "," << oPointInWorld[2] << endl;
+    //cout << "aPointInWorld:" << field_x << "," << field_y << "," << field_z << endl;
+    
+    T error;
+    if(_isStraightLine) {
+      T offset = T(_normal.x) * oPointInWorld[0] + T(_normal.y) * oPointInWorld[1];
+      // The error is the difference between the calculated offse	ts
+      error = offset - _offset;
+    } else {
+      T radius = ceres::pow(T(_centerOfArc.x) - oPointInWorld[0], 2) + ceres::pow(T(_centerOfArc.y)  -oPointInWorld[1], 2) + ceres::pow(T(_centerOfArc.z) - oPointInWorld[2], 2);
+      radius = ceres::sqrt(radius);
+      // The error is the difference between the calculated offsets
+      error = radius - T(_radiusOfArc);
+    }
+    residuals[0] = error;
+    // z co ordinate of all field points should be 0
+    //residuals[1] = oPointInWorld[2];
+    return true;
+  }
+  
+  // Factory to hide the construction of the CostFunction object from
+  // the client code.
+  static ceres::CostFunction* Create(GVector::vector2d<double> normal, 
+				     double offset,
+				     const GVector::vector2d<double> imagePoint,
+				     const double height
+				    ) {
+    return (new ceres::AutoDiffCostFunction<
+            ImageToFieldCostFunctor, 1, 4, 2, 4>(
+                new ImageToFieldCostFunctor(normal, offset, imagePoint, height)));
+  }
+  
+  static ceres::CostFunction* Create(GVector::vector3d<double> center, 
+				     double radius,
+				     const GVector::vector2d<double> imagePoint,
+				     const double height
+				    ) {
+    return (new ceres::AutoDiffCostFunction<
+            ImageToFieldCostFunctor, 1, 4, 2, 4>(
+                new ImageToFieldCostFunctor(center, radius, imagePoint, height)));
+  }
+  
+  bool _isStraightLine;
+  GVector::vector3d<double> _centerOfArc;
+  GVector::vector2d<double> _normal;
+  double _offset, _height, _radiusOfArc;
+  GVector::vector2d<double> _imagePoint;
+};
+
+void CameraParameters::fullCalibration(std::vector<GVector::vector3d<double> > &p_f, std::vector<GVector::vector2d<double> > &p_i) 
+{
+  double camIntrinsics[4] = {principal_point_x->getDouble(), principal_point_y->getDouble(), focal_length->getDouble(), distortion->getDouble()};
+  double camTranslation[3] = {txP->getDouble(), tyP->getDouble(), tzP->getDouble()};
+  //ceres uses w,x,y,z order to represent quaternions
+  double rotation[4] = {q3P->getDouble(), q0P->getDouble(), q1P->getDouble(), q2P->getDouble()};
+  
+  Problem problem;
+  int numberOfBadPoints = 0;
+  int numberOfGoodPoints = 0;
+  int numberOfPoints = 0;
+  
   std::vector<CalibrationData>::iterator ls_it = calibrationSegments.begin();
-
-  int i = 0;
   for (; ls_it != calibrationSegments.end(); ls_it++) {
-    std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator pts_it =
-        (*ls_it).imgPts.begin();
+    
+    GVector::vector2d<double> normal;
+    double offset;
+    //y = mx + c => y - mx = c => (-m)x + y = c => a = -m, b = 1, offset = c
+    if((*ls_it).straightLine == true) {
+      if((*ls_it).p1.y == (*ls_it).p2.y) {
+	normal.x = 0;
+	normal.y = 1;
+	offset = (*ls_it).p1.y;
+      } else if((*ls_it).p1.x == (*ls_it).p2.x) {
+	normal.x = 1;
+	normal.y = 0;
+	offset = (*ls_it).p1.x;
+      }
+    }
+    
+    std::vector< std::pair<GVector::vector2d<double>,bool> >::iterator
+	pts_it = (*ls_it).imgPts.begin();
+    
     for (; pts_it != (*ls_it).imgPts.end(); pts_it++) {
+      ++numberOfPoints;
       if (pts_it->second) {
-        GVector::vector2d<double> proj_p;
-        double alpha = p_alpha(i);
-        GVector::vector3d<double >alpha_point;
-        if (ls_it->straightLine) {
-          alpha_point = alpha * (*ls_it).p1 + (1 - alpha) * (*ls_it).p2;
-        } else {
-          double theta = alpha * (*ls_it).theta1 + (1.0 - alpha) *
-              (*ls_it).theta2;
-          alpha_point = ls_it->center +
-              ls_it->radius*GVector::vector3d<double>(
-                  cos(theta),sin(theta),0.0);
-        }
-
-        field2image(alpha_point, proj_p, p);
-
-        line_x += (proj_p.x - pts_it->first.x) * (proj_p.x - pts_it->first.x);
-        line_y += (proj_p.y - pts_it->first.y) * (proj_p.y - pts_it->first.y);
-
-        i++;
+	++numberOfGoodPoints;
+	if((*ls_it).straightLine == true) {
+	  CostFunction* cost_function = ImageToFieldCostFunctor::Create(normal, offset, pts_it->first, camTranslation[2]);
+	  problem.AddResidualBlock(cost_function, NULL, rotation, camTranslation, camIntrinsics);
+	} else {
+	  CostFunction* cost_function = ImageToFieldCostFunctor::Create((*ls_it).center, (*ls_it).radius, pts_it->first, camTranslation[2]);
+	  problem.AddResidualBlock(cost_function, NULL, rotation, camTranslation, camIntrinsics); 
+	}
+      } else {
+	++numberOfBadPoints;
       }
     }
   }
+  
+  ceres::QuaternionParameterization *quaternion_parameterization = new ceres::QuaternionParameterization();
+  problem.SetParameterization(rotation, new ceres::QuaternionParameterization());
+  problem.SetParameterLowerBound(camIntrinsics, 3, 0);
+  // Run the solver!
+  Solver::Options options;
+  
+  options.linear_solver_type = ceres::DENSE_QR;
+  options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
+  options.minimizer_progress_to_stdout = true;
+  Solver::Summary summary;
+  Solve(options, &problem, &summary);
+  std::cout << summary.FullReport() << "\n";
 
-  if (i != 0) {
-    std::cerr << "RESIDUAL LINE POINTS: " << sqrt(line_x/(double)i) << " "
-              << sqrt(line_y/(double)i) << std::endl;
-  }
- }
+  std::cout << "focalLength: " << camIntrinsics[2] << " px: " << camIntrinsics[0] << " py: " << camIntrinsics[1] << " distortion: " << camIntrinsics[3] << endl;
+  std::cout << "q0P: " << rotation[1] << " q1P: " << rotation[2] << " q2P: " << rotation[3] << " q3P: " << rotation[0] << endl;
+  std::cout << "cx: " << camTranslation[0] << " cy: " << camTranslation[1] << " cz: " << camTranslation[2] << endl;
 
-#endif
+  q0P->setDouble(rotation[1]);//x
+  q1P->setDouble(rotation[2]);//y
+  q2P->setDouble(rotation[3]);//z
+  q3P->setDouble(rotation[0]);//w
+  txP->setDouble(camTranslation[0]);
+  tyP->setDouble(camTranslation[1]);
+  tzP->setDouble(camTranslation[2]);
+  
+  principal_point_x->setDouble(camIntrinsics[0]);
+  principal_point_y->setDouble(camIntrinsics[1]);
+  focal_length->setDouble(camIntrinsics[2]);
+  distortion->setDouble(camIntrinsics[3]);
+  
+  i2fTof2i();
 }
-
 
 CameraParameters::AdditionalCalibrationInformation::
     AdditionalCalibrationInformation(int camera_index_) :
@@ -767,7 +887,7 @@ CameraParameters::AdditionalCalibrationInformation::
   image_boundary = new VarDouble("Image boundary for edge detection", 10.0);
   max_feature_distance = new VarDouble("Max distance of edge from camera",
                                        9000.0);
-  convergence_timeout = new VarDouble("convergence timeout (s)", 10.0);
+  convergence_timeout = new VarDouble("convergence timeout (s)", 20.0);
   cov_corner_x = new VarDouble("Cov corner measurement x", 1.0);
   cov_corner_y = new VarDouble("Cov corner measurement y", 1.0);
   cov_ls_x = new VarDouble("Cov line segment measurement x", 1.0);
