@@ -454,8 +454,8 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
   p_to_est.push_back(T_2);
 
   double lambda(0.01);
-
-  Eigen::VectorXd p(STATE_SPACE_DIMENSION);
+  int stateSpaceDimension = STATE_SPACE_DIMENSION;
+  Eigen::VectorXd p(stateSpaceDimension);
   p.setZero();
 
   // Calculate first chisqr for all points using the start parameters
@@ -524,11 +524,11 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
     
     // Augment alpha
     alpha += Eigen::MatrixXd::Identity(
-        STATE_SPACE_DIMENSION, STATE_SPACE_DIMENSION)
+        stateSpaceDimension, stateSpaceDimension)
         * lambda;
 
     // Solve for x
-    Eigen::VectorXd new_p(STATE_SPACE_DIMENSION);
+    Eigen::VectorXd new_p(stateSpaceDimension);
 
     // Due to an API change we need to check for
     // the right call at compile time
