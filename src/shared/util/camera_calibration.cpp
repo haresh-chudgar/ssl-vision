@@ -454,8 +454,8 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
   p_to_est.push_back(T_2);
 
   double lambda(0.01);
-
-  Eigen::VectorXd p(STATE_SPACE_DIMENSION);
+  int stateSpaceDimension = STATE_SPACE_DIMENSION;
+  Eigen::VectorXd p(stateSpaceDimension);
   p.setZero();
 
   // Calculate first chisqr for all points using the start parameters
@@ -476,12 +476,11 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
   cov_ls_inv << 1 / additional_calibration_information->cov_ls_x->getDouble(),
       0 , 0 , 1 / additional_calibration_information->cov_ls_y->getDouble();
 
-  int stateDimension = STATE_SPACE_DIMENSION;
   // Matrices for A, b and the Jacobian J
-  Eigen::MatrixXd alpha(stateDimension,
-                        stateDimension);
-  Eigen::VectorXd beta(stateDimension, 1);
-  Eigen::MatrixXd J(2, stateDimension);
+  Eigen::MatrixXd alpha(stateSpaceDimension,
+                        stateSpaceDimension);
+  Eigen::VectorXd beta(stateSpaceDimension, 1);
+  Eigen::MatrixXd J(2, stateSpaceDimension);
 
   bool stop_optimization(false);
   int convergence_counter(0);
@@ -524,11 +523,11 @@ void CameraParameters::initialCalibration(std::vector<GVector::vector3d<double> 
     
     // Augment alpha
     alpha += Eigen::MatrixXd::Identity(
-        STATE_SPACE_DIMENSION, STATE_SPACE_DIMENSION)
+        stateSpaceDimension, stateSpaceDimension)
         * lambda;
 
     // Solve for x
-    Eigen::VectorXd new_p(STATE_SPACE_DIMENSION);
+    Eigen::VectorXd new_p(stateSpaceDimension);
 
     // Due to an API change we need to check for
     // the right call at compile time

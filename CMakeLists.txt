@@ -18,7 +18,7 @@ include_directories(${PROJECT_BINARY_DIR})
 
 find_package( Eigen3 REQUIRED )
 include_directories(${EIGEN3_INCLUDE_DIR})
-include_directories(/usr/local/include/aravis-0.4/)
+include_directories(/usr/local/include/aravis-0.6/)
 include_directories(/usr/include/glib-2.0)
 include_directories(/usr/lib/x86_64-linux-gnu/glib-2.0/include)
 
@@ -147,7 +147,7 @@ message (STATUS "Custom CC Flags: ${cc_flags}")
 
 add_definitions(${cc_flags})
 
-set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU gobject-2.0 glib-2.0 aravis-0.4 ceres)
+set (libs ${QT_LIBRARIES} ${EIGEN3_LIBRARIES} dc1394 jpeg png protobuf pthread GL GLU gobject-2.0 glib-2.0 aravis-0.6 ceres)
 
 ## build the common code
 add_library(sslvision ${SHARED_MOC_SRCS} ${SHARED_RC_SRCS} ${CC_PROTO} ${SHARED_SRCS})
